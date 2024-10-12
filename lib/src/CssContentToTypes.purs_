@@ -1,0 +1,40 @@
+module CssContentToTypes
+  ( cssContentToTypes
+  ) where
+
+import Prelude
+
+import Data.Array (filter)
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.String (Pattern(..), split, stripPrefix)
+import Data.String.Regex (Regex, match, regex)
+import Data.String.Regex.Flags (noFlags)
+import Data.Traversable (traverse)
+import Language.CSS.Parser (Value(..), parse)
+
+-- [".myButton",".myButton",".myButton2","#myButton3","#myButton4",".myButton5",".classInsideClass",".classInsideClass2",,".classWithBefore2Pre",".classWithBefore2:before",".classWithBefore3:before",".classWithBefore3Post",".classInOneLine","#idInOneLine",".myButton3"]
+
+-- from ".classWithBefore1:before" to "classWithBefore1"
+
+-- e.g. ".myButton3 > a" to ".myButton3"
+extractClassesAndIds :: String -> Array String
+extractClassesAndIds = filter (\t -> stripPrefix (Pattern "#") t /= Nothing || stripPrefix (Pattern ".") t /= Nothing) <<< split (Pattern " ")
+
+extractClassOrId :: String -> Maybe String
+extractClassOrId css = do
+  r <- regex """[\.#]([\w\-]+)""" noFlags
+  matches <- match r css
+  fromMaybe Nothing (matches !! 1)
+
+valueToSelectors :: Value -> Array String
+valueToSelectors (Selector selector values) = selector <> join (map valueToSelectors values)
+valueToSelectors (AtRule _ _ values) = join $ map valueToSelectors values
+valueToSelectors _ = []
+
+cssContentToTypes :: String -> Array String
+cssContentToTypes cssContent =
+  let
+    parsedValues = either (const []) (join <<< map valueToSelectors) $ parse cssContent
+    extractedClasses = join $ map extractClassesAndIds parsedValues
+  in
+    fromMaybe [] $ traverse extractClassOrId extractedClasses

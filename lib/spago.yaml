@@ -1,0 +1,47 @@
+package:
+  name: purs-utils-lib
+  publish:
+    license: MIT
+    version: 1.0.0
+    location:
+      githubOwner: srghma
+      githubRepo: purescript-purs-utils
+  dependencies:
+    - datetime
+    - effect
+    - either
+    - enums
+    - exceptions
+    - functions
+    - integers
+    - js-date
+    - maybe
+    - node-buffer
+    - node-path
+    - node-os
+    - node-streams
+    - nullable
+    - partial
+    - prelude
+    - strings
+    - unsafe-coerce
+    - refs
+    - pathy
+    - node-fs
+    - node-process
+    - strings
+    - node-fs
+    - pathy
+    - pathy-node
+    - unicode
+  test:
+    main: Test.Main
+    dependencies:
+      - console
+      - aff
+      - arrays
+      - assert
+      - spec-node
+      - spec-discovery
+      - debug
+      - codec-argonaut

@@ -1,0 +1,12 @@
+workspace:
+  packageSet:
+    registry: 60.5.0
+  extraPackages:
+    node-fs:
+      path: /home/srghma/projects/purescript-node-fs
+    pathy:
+      path: /home/srghma/projects/purescript-pathy
+    pathy-node:
+      path: /home/srghma/projects/purescript-pathy-node
+    node-workerbees:
+      path: /home/srghma/projects/purescript-node-workerbees

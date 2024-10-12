@@ -1,0 +1,100 @@
+module Utils where
+
+import Prelude
+
+import Control.Monad.Error.Class (throwError)
+import Data.Array (filter, last)
+import Data.Either (Either(..))
+import Data.Maybe (Maybe(..), maybe)
+import Data.NonEmpty (NonEmpty, fromArray)
+import Data.String (Pattern(..), split)
+import Data.String.Utils (stripSuffix)
+import Data.Traversable (traverse)
+import Effect.Aff (Aff)
+import Effect.Class (liftEffect)
+import Effect.Exception (error)
+import Node.FS.Aff (exists)
+import Node.Path (FilePath)
+import Node.Process (cwd)
+import Options.Applicative (ReadM, str)
+import System.FilePath (takeExtensions)
+import Text.Regex.PCRE.Light (Regex)
+import Text.Regex.PCRE.Light as Regex
+
+import ModuleName (ModuleName, toModuleName_arrayOfString)
+import UpdateModuleName (moduleNameError_print)
+
+filterDirTreeByFilename :: forall a. (String -> Boolean) -> DirTree a -> Boolean
+filterDirTreeByFilename _ (Dir name _) | name == "." || name == ".." = false
+filterDirTreeByFilename pred (File name _) = pred name
+filterDirTreeByFilename _ _ = true
+
+dirTreeContent :: forall a. DirTree a -> Aff (Array a)
+dirTreeContent (Failed name err) = throwError $ error $ "Dir tree error: filename " <> show name <> ", error " <> show err
+dirTreeContent (File _ a) = pure [a]
+dirTreeContent (Dir _ contents) = do
+  output <- traverse dirTreeContent contents
+  pure $ join output
+
+anyCaseToCamelCase :: String -> String
+anyCaseToCamelCase = identity -- Placeholder, implement actual logic
+
+ensureTrailingSlash :: FilePath -> FilePath
+ensureTrailingSlash p = if last p /= Just '/' then p <> "/" else p
+
+stringToDir :: FilePath -> FilePath
+stringToDir = ensureTrailingSlash
+
+parseDir :: ReadM FilePath
+parseDir = map stringToDir str
+
+splitOn :: String -> String -> { before :: String, after :: String }
+splitOn delimiter text =
+  let parts = split (Pattern delimiter) text
+  in { before: maybe "" identity $ head parts
+     , after: maybe "" identity $ tail parts >>= head
+     }
+
+fullPathToModuleName :: FilePath -> FilePath -> Aff ModuleName
+fullPathToModuleName baseDir fullPath = do
+  fullPathWithoutBase <- maybe
+    (throwError $ error $ "Cannot strip baseDir " <> show baseDir <> " from path " <> show fullPath)
+    pure
+    $ stripPrefix baseDir fullPath
+
+  let parts = map (stripSuffix "/") $ split (Pattern "/") $ dropExtensions fullPathWithoutBase
+
+  case toModuleName_arrayOfString parts of
+    Left e -> throwError $ error $ "In directory " <> baseDir <> " cannot convert path " <> fullPath <> " to module name. Error: " <> moduleNameError_print e
+    Right x -> pure x
+
+appendIfNotAlreadySuffix :: forall a. Eq a => Array a -> Array a -> Array a
+appendIfNotAlreadySuffix suffix target =
+  if suffix `isSuffixOf` target
+     then target
+     else target <> suffix
+
+stripSuffix :: forall a. Eq a => Array a -> Array a -> Array a
+stripSuffix suffix = reverse <<< drop (length suffix) <<< reverse
+
+isPursFile :: FilePath -> Boolean
+isPursFile n = takeExtensions n == ".purs"
+
+isCssModuleFile :: FilePath -> Boolean
+isCssModuleFile n = takeExtensions n == ".module.css" || takeExtensions n == ".module.scss"
+
+findFilesWith :: (FilePath -> Boolean) -> FilePath -> Aff (Array FilePath)
+findFilesWith f baseDir = do
+  -- Implement directory traversal logic here
+  pure []
+
+ensureDirsExist :: NonEmpty FilePath -> Aff Unit
+ensureDirsExist filepaths = do
+  results <- traverse (\path -> exists path >>= \e -> pure { path, exists: e }) filepaths
+  let nonExistingDirs = fromArray $ filter (not <<< _.exists) results
+  case nonExistingDirs of
+    Nothing -> pure unit
+    Just dirs -> throwError $ error $ "The following directories do not exist:\n" <> joinWith "\n" (map _.path dirs)
+
+wrapInQuotes :: String -> String
+wrapInQuotes t = "\"" <> t <> "\""

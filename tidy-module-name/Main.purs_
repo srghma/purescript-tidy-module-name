@@ -1,0 +1,133 @@
+module Main where
+
+import Prelude
+
+import AppOptions (GlobalAndCommandOptions, commandOptionsToCommandShort, commandOptionsToTargetDirectoriesOptions, globalAndCommandOptions_color, globalAndCommandOptions_command)
+import Control.Parallel (parTraverse)
+import Data.Array (concat)
+import Data.Either (Either(..))
+import Data.Foldable (traverse_)
+import Data.Maybe (Maybe(..))
+import Data.NonEmpty (NonEmpty)
+import Data.NonEmpty as NonEmpty
+import Effect (Effect)
+import Effect.Aff (Aff, launchAff_)
+import Effect.Class (liftEffect)
+import Effect.Console as Console
+import Logger (Logger, makeLogger, withConcurrentLogger)
+import ModuleName (ModuleName, printModuleName)
+import Node.Encoding (Encoding(..))
+import Node.FS.Aff as FS
+import Node.Path (FilePath)
+import Node.Path as Path
+import Node.Process as Process
+import Options.Applicative (ParserInfo, execParser, fullDesc, header, helper, info, progDesc, (<**>))
+import Text.Colour as Colour
+import Text.Colour.Chunk (Chunk)
+import UpdateModuleName (UpdateModuleNameResult(..), checkModuleName, updateModuleName)
+import Utils (ensureDirsExist, findFilesWith, fullPathToModuleName, isPursFile, wrapInQuotes)
+
+appOptionsParserInfo :: ParserInfo GlobalAndCommandOptions
+appOptionsParserInfo = info (globalAndCommandOptionsParser <**> helper)
+  ( fullDesc
+  <> progDesc "Finds .purs files and updates their module name"
+  <> header "./src/Foo/Bar.purs -> module Foo.Bar\n./test/Foo/Bar.purs -> module Test.Foo.Bar" )
+
+-- type Program a = Aff (Array (Array Chunk))
+--
+-- programLog :: Array Chunk -> Program Unit
+-- programLog x = pure [x]
+--
+-- programLogAndDieInTheEnd :: Array Chunk -> Program Unit
+-- programLogAndDieInTheEnd x = pure [x]
+--
+-- programLogModuleNameOutputError :: ModuleNameOutputError -> Program Unit
+-- programLogModuleNameOutputError e =
+--   programLogAndDieInTheEnd
+--     [ Colour.fore Colour.red "  error: "
+--     , Colour.fore Colour.brightRed $ Colour.chunk case e of
+--         ModuleNameOutputError__CannotParseModuleNameInsideOfFile moduleLine ->
+--           "cannot parse module name " <> moduleLine
+--         ModuleNameOutputError__ImpossibleErrorLineWithIndexNotFound ->
+--           "impossible case, line with index not found"
+--     ]
+
+-- program :: CommandShort -> FilePath -> FilePath -> Maybe ModuleName -> Program Unit
+-- program commandShort baseDir filePath maybePrependModuleName = do
+--   programLog
+--     [ Colour.fore Colour.green "processing "
+--     , Colour.fore Colour.yellow (Colour.chunk filePath)
+--     ]
+--
+--   fileContent <- liftEffect $ FS.readTextFile UTF8 filePath
+--
+--   moduleName_fromPath <- fullPathToModuleName baseDir filePath
+--
+--   let moduleName_expected = prependMaybeModuleName maybePrependModuleName moduleName_fromPath
+--
+--   case commandShort of
+--     Command_FormatInPlace -> do
+--       case updateModuleName fileContent moduleName_expected of
+--         UpdateModuleNameOutput__NothingChanged -> programLog [Colour.fore Colour.blue "  nothing changed"]
+--         UpdateModuleNameOutput__Error e -> programLogModuleNameOutputError e
+--         UpdateModuleNameOutput__Updated newFileContent -> do
+--           liftEffect $ FS.writeTextFile UTF8 filePath newFileContent
+--           programLog
+--             [ Colour.fore Colour.yellow "  updated module name to "
+--             , Colour.fore Colour.cyan (Colour.chunk $ wrapInQuotes $ printModuleName moduleName_expected)
+--             ]
+--     Command_Check ->
+--       case checkModuleName fileContent moduleName_expected of
+--         CheckModuleNameOutput__NothingChanged -> programLog [Colour.fore Colour.blue "  is up to date"]
+--         CheckModuleNameOutput__Error e -> programLogModuleNameOutputError e
+--         CheckModuleNameOutput__ActualDoesntExistExpectedShouldBeAdded expectedModuleName ->
+--           programLogAndDieInTheEnd
+--             [ Colour.fore Colour.red "  module name is not present in a file, "
+--             , Colour.fore Colour.cyan (Colour.chunk $ wrapInQuotes expectedModuleName)
+--             , Colour.fore Colour.red " should be added"
+--             ]
+--         CheckModuleNameOutput__ActualShouldBeUpdatedToExpected actualModuleName expectedModuleName ->
+--           programLogAndDieInTheEnd
+--             [ Colour.fore Colour.red "  module name "
+--             , Colour.fore Colour.cyan (Colour.chunk $ wrapInQuotes actualModuleName)
+--             , Colour.fore Colour.red " should be updated to "
+--             , Colour.fore Colour.cyan (Colour.chunk $ wrapInQuotes expectedModuleName)
+--             ]
+
+main :: Effect Unit
+main = launchAff_ do
+  globalAndCommandOptions <- liftEffect $ execParser appOptionsParserInfo
+  trace globalAndCommandOptions
+
+  -- let
+  --   color = globalAndCommandOptions_color globalAndCommandOptions
+  --   commandShort = commandOptionsToCommandShort $ globalAndCommandOptions_command globalAndCommandOptions
+  --   targetDirectoriesOptions = commandOptionsToTargetDirectoriesOptions $ globalAndCommandOptions_command globalAndCommandOptions
+  --
+  -- logger <- liftEffect $ makeLogger color
+  --
+  -- directoryConfig :: NonEmpty DirectoryConfig <- targetDirectoriesOptionsToDirectoryConfigOrCwd targetDirectoriesOptions
+  --
+  -- let
+  --   (dirsThatRequiredToBePresent :: Maybe (NonEmpty FilePath)) = collectRequiredDirs directoryConfig
+  --
+  -- traverse_ ensureDirsExist dirsThatRequiredToBePresent
+  --
+  -- baseDirs :: NonEmpty (Tuple3 FilePath (Array FilePath) (Maybe ModuleName)) <-
+  --   parTraverse (\config -> do
+  --     let baseDir = directoryConfig_pathToDirectory config
+  --     files <- findFilesWith isPursFile baseDir
+  --     pure (Tuple3 baseDir files (directoryConfig_prependModuleName config))
+  --   ) directoryConfig
+  --
+  -- withConcurrentLogger logger \concurrentLogger -> do
+  --   results <- parTraverse (\(Tuple3 baseDir filePaths maybePrependModuleName) -> do
+  --     parTraverse (\filePath -> do
+  --       logs <- program commandShort baseDir filePath maybePrependModuleName
+  --       liftEffect $ concurrentLogger Log $ Colour.unlinesChunks $ concat logs
+  --       pure $ any (\log -> log == [Colour.fore Colour.red "  error: "]) logs
+  --     ) filePaths
+  --   ) baseDirs
+  --
+  --   let die = any (any identity) results
+  --   when die $ liftEffect $ Process.exit 1

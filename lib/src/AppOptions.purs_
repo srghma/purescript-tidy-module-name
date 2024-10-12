@@ -1,0 +1,206 @@
+module AppOptions
+  ( CommandOptions(..)
+  , CommandShort(..)
+  , DirOption_Custom(..)
+  , DirectoryConfig
+  , TargetDirectoriesOptions(..)
+  , TargetDirectoriesOptionsFlagged
+  , collectRequiredDirs
+  , colorOptionParser
+  , commandOptionsParser
+  , commandOptionsToCommandShort
+  , commandOptionsToTargetDirectoriesOptions
+  , globalAndCommandOptionsParser
+  , noColor
+  , parseDirOption_Custom
+  , rootConfig
+  , rootConfigs
+  , targetDirectoriesOptionsFlaggedParser
+  , targetDirectoriesOptionsFlaggedToDirectoryConfig
+  , targetDirectoriesOptionsParser
+  , targetDirectoriesOptionsPositionalParser
+  , targetDirectoriesOptionsToDirectoryConfig
+  , targetDirectoriesOptionsToDirectoryConfigOrCwd
+  )
+  where
+
+import Prelude
+
+import Control.Alt ((<|>))
+import Data.Array (concatMap, mapMaybe)
+import Data.Either (Either(..))
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Array.NonEmpty (NonEmptyArray)
+import Data.Array.NonEmpty as NonEmptyArray
+import Data.String (Pattern(..), split)
+import Data.Traversable (traverse)
+import Effect.Aff (Aff)
+import Effect.Class (liftEffect)
+import ModuleName (ModuleName, parseModuleName_stringSeparatedWithDots)
+import Node.Path (FilePath)
+import Node.Process (cwd)
+import Options.Applicative
+import UpdateModuleName (UpdateModuleNameResult(..))
+-- import Utils (stringToDir)
+
+collectRequiredDirs :: NonEmptyArray DirectoryConfig -> Maybe (NonEmptyArray FilePath)
+collectRequiredDirs directoryConfigs =
+  NonEmptyArray.fromArray $
+    mapMaybe
+      (\config ->
+        if config.required
+          then Just config.pathToDirectory
+          else Nothing)
+      (NonEmptyArray.toArray directoryConfigs)
+
+type DirectoryConfig =
+  { prependModuleName :: Maybe ModuleName
+  , pathToDirectory :: FilePath
+  , required :: Boolean
+  }
+
+derive instance Eq DirectoryConfig
+instance Show DirectoryConfig where
+  show config = "DirectoryConfig " <> show config
+
+rootConfig :: FilePath -> NonEmptyArray DirectoryConfig
+rootConfig rootPath =
+  { prependModuleName: Nothing
+  , pathToDirectory: rootPath <> "/src"
+  , required: true
+  }
+  :| [ { prependModuleName: Just testModuleName
+       , pathToDirectory: rootPath <> "/test"
+       , required: false
+       }
+     ]
+
+rootConfigs :: Array FilePath -> Array DirectoryConfig
+rootConfigs = concatMap (NonEmptyArray.toArray <<< rootConfig)
+
+targetDirectoriesOptionsToDirectoryConfigOrCwd :: TargetDirectoriesOptions -> Aff (NonEmptyArray DirectoryConfig)
+targetDirectoriesOptionsToDirectoryConfigOrCwd x = case targetDirectoriesOptionsToDirectoryConfig x of
+  Just x' -> pure x'
+  Nothing -> do
+    currentDir <- liftEffect cwd
+    pure $ rootConfig currentDir
+
+targetDirectoriesOptionsToDirectoryConfig :: TargetDirectoriesOptions -> Maybe (NonEmptyArray DirectoryConfig)
+targetDirectoriesOptionsToDirectoryConfig = case _ of
+  TargetDirectoriesOptions_Flagged opts -> targetDirectoriesOptionsFlaggedToDirectoryConfig opts
+  TargetDirectoriesOptions_Positional arrayFilePath -> NonEmptyArray.fromArray $ rootConfigs arrayFilePath
+
+targetDirectoriesOptionsFlaggedToDirectoryConfig :: TargetDirectoriesOptionsFlagged -> Maybe (NonEmptyArray DirectoryConfig)
+targetDirectoriesOptionsFlaggedToDirectoryConfig opts =
+  let
+    srcConfigs = map (\srcDir -> { prependModuleName: Nothing, pathToDirectory: srcDir, required: true }) opts.targetDirectoriesOptionsFlagged_srcDirs
+    testConfigs = map (\testDir -> { prependModuleName: Just testModuleName, pathToDirectory: testDir, required: true }) opts.targetDirectoriesOptionsFlagged_testDirs
+    customConfigs = map (\(DirOption_Custom moduleName dir) -> { prependModuleName: Just moduleName, pathToDirectory: dir, required: true }) opts.targetDirectoriesOptionsFlagged_customDirs
+    allConfigs = rootConfigs opts.targetDirectoriesOptionsFlagged_projectRoots <> srcConfigs <> testConfigs <> customConfigs
+  in NonEmptyArray.fromArray allConfigs
+
+data DirOption_Custom = DirOption_Custom ModuleName FilePath
+
+derive instance Eq DirOption_Custom
+instance Show DirOption_Custom where
+  show (DirOption_Custom moduleName filePath) = "DirOption_Custom " <> show moduleName <> " " <> show filePath
+
+parseDirOption_Custom :: String -> Either String DirOption_Custom
+parseDirOption_Custom str = do
+  let [arg1, arg2] = split (Pattern "=") str
+  case parseModuleName_stringSeparatedWithDots arg1 of
+    Left e -> Left $ "Module name error: " <> show e
+    Right val1 -> Right $ DirOption_Custom val1 (stringToDir arg2)
+
+type TargetDirectoriesOptionsFlagged =
+  { projectRoots :: Array FilePath
+  , srcDirs :: Array FilePath
+  , testDirs :: Array FilePath
+  , customDirs :: Array DirOption_Custom
+  }
+
+derive instance Eq TargetDirectoriesOptionsFlagged
+instance Show TargetDirectoriesOptionsFlagged where
+  show opts = "TargetDirectoriesOptionsFlagged " <> show opts
+
+targetDirectoriesOptionsFlaggedParser :: Parser TargetDirectoriesOptionsFlagged
+targetDirectoriesOptionsFlaggedParser =
+  { projectRoots: _
+  , srcDirs: _
+  , testDirs: _
+  , customDirs: _
+  }
+  <$> many (option str (long "root" <> short 'r' <> metavar "DIRECTORY" <> help "Base dir with two directories - src/ and test/. Can pass multiple -r"))
+  <*> many (option str (long "src" <> short 's' <> metavar "DIRECTORY" <> help "Source directory."))
+  <*> many (option str (long "test" <> short 't' <> metavar "DIRECTORY" <> help "Test directory."))
+  <*> many (option (eitherReader parseDirOption_Custom) (long "custom" <> short 'c'))
+
+data TargetDirectoriesOptions
+  = TargetDirectoriesOptions_Flagged TargetDirectoriesOptionsFlagged
+  | TargetDirectoriesOptions_Positional (Array FilePath)
+
+derive instance Eq TargetDirectoriesOptions
+instance Show TargetDirectoriesOptions where
+  show (TargetDirectoriesOptions_Flagged flagged) = "TargetDirectoriesOptions_Flagged " <> show flagged
+  show (TargetDirectoriesOptions_Positional paths) = "TargetDirectoriesOptions_Positional " <> show paths
+
+targetDirectoriesOptionsPositionalParser :: Parser (Array FilePath)
+targetDirectoriesOptionsPositionalParser = many (argument str (metavar "DIRECTORY" <> help "Positional arguments treated as --root directories."))
+
+targetDirectoriesOptionsParser :: Parser TargetDirectoriesOptions
+targetDirectoriesOptionsParser =
+  (TargetDirectoriesOptions_Flagged <$> targetDirectoriesOptionsFlaggedParser)
+
+data CommandOptions
+  = CommandOptions_FormatInPlace TargetDirectoriesOptions
+  | CommandOptions_Check TargetDirectoriesOptions
+
+derive instance Eq CommandOptions
+derive instance Generic CommandOptions _
+instance Show CommandOptions where show = genericShow
+
+commandOptionsParser :: Parser CommandOptions
+commandOptionsParser = subparser
+  ( command "format-in-place" (info (CommandOptions_FormatInPlace <$> targetDirectoriesOptionsParser) (progDesc "Update files"))
+  <> command "check" (info (CommandOptions_Check <$> targetDirectoriesOptionsParser) (progDesc "Throw if files are not updated"))
+  )
+
+noColor :: Parser Boolean
+noColor =
+  O.switch
+    ( O.long "no-color"
+        <> O.long "monochrome"
+        <> O.help "Force logging without ANSI color escape sequences"
+    )
+
+type GlobalAndCommandOptions =
+  { color :: ColorOption
+  , command :: CommandOptions
+  }
+
+globalAndCommandOptionsParser :: Parser GlobalAndCommandOptions
+globalAndCommandOptionsParser =
+  { color: _
+  , command: _
+  }
+  <$> colorOptionParser
+  <*> commandOptionsParser
+
+data CommandShort
+  = Command_FormatInPlace
+  | Command_Check
+
+derive instance Eq CommandShort
+instance Show CommandShort where
+  show Command_FormatInPlace = "Command_FormatInPlace"
+  show Command_Check = "Command_Check"
+
+commandOptionsToCommandShort :: CommandOptions -> CommandShort
+commandOptionsToCommandShort = case _ of
+  CommandOptions_FormatInPlace _ -> Command_FormatInPlace
+  CommandOptions_Check _ -> Command_Check
+
+commandOptionsToTargetDirectoriesOptions :: CommandOptions -> TargetDirectoriesOptions
+commandOptionsToTargetDirectoriesOptions = case _ of
+  CommandOptions_FormatInPlace x -> x
+  CommandOptions_Check x -> x
