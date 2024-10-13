@@ -22,38 +22,48 @@ import Node.Path (FilePath)
 import Node.WorkerBees as Worker
 import Partial.Unsafe (unsafeCrashWith)
 import Data.Argonaut.Core as J
+import UpdateModuleName
 
 type WorkerData =
   { isCheckMode :: Boolean
   }
 
-type WorkerInput = FilePath
-  -- { filePath :: FilePath
-  -- }
+type WorkerInput_Implementation =
+  { filePath :: FilePath
+  , newModuleName :: ModuleName
+  }
+
+type WorkerOutput_Implementation =
+  { filePath :: FilePath
+  , result :: UpdateModuleNameResult
+  }
+
+type WorkerInput =
+  { filePath :: FilePath
+  , newModuleName :: String
+  }
 
 type WorkerOutput =
   { filePath :: FilePath
-  , result_UpdateModuleNameResult :: J.Json
-  -- , timing :: Number
+  , result :: J.Json
   }
 
-formatInPlaceCommand :: Boolean -> WorkerInput -> Aff WorkerOutput
-formatInPlaceCommand isCheckMode filePath = do
+formatInPlaceCommand_Implementation :: Boolean -> WorkerInput_Implementation -> Aff WorkerOutput_Implementation
+formatInPlaceCommand_Implementation isCheckMode { filePath, newModuleName } = do
   contents <- FS.readTextFile UTF8 filePath
+  let result = updateModuleName contents newModuleName
+  pure { filePath, result }
 
-  let updateModuleNameResult = updateModuleName contents newModuleName
+decodeWorkerInput :: J.Json -> Either String WorkerInput_Implementation
+decodeWorkerInput = CA.decode $ CA.object "WorkerInput" $ CA.record
+  # CA.recordProp (Proxy :: _ "filePath") CA.string
+  # CA.recordProp (Proxy :: _ "newModuleName") moduleNameCodec
 
-  -- case formatCommand formatOptions operators contents of
-  --   Right formatted -> do
-  --     timing <- map (unwrap <<< toMilliseconds) $ liftEffect $ hrtimeDiff start
-  --     if isCheckMode then do
-  --       let alreadyFormatted = formatted == contents
-  --       pure { filePath, error: "", alreadyFormatted, timing }
-  --     else do
-  --       FS.writeTextFile UTF8 filePath formatted
-  --       pure { filePath, error: "", alreadyFormatted: false, timing }
-  --   Left error ->
-  pure { filePath, result_UpdateModuleNameResult: CA.encode updateModuleNameResult_codec updateModuleNameResult }
+formatInPlaceCommand :: Boolean -> WorkerInput -> Aff WorkerOutput
+formatInPlaceCommand isCheckMode input = do
+  workerInput_Implementation <- liftEffect $ either throwError pure $ decodeWorkerInput $ J.fromString input.newModuleName
+  { filePath, result } <- formatInPlaceCommand_Implementation isCheckMode workerInput_Implementation
+  pure { filePath, result: CA.encode updateModuleNameResult_codec result }
 
 main :: Effect Unit
 main = Worker.makeAsMain \{ receive, reply, workerData: { isCheckMode } } -> do

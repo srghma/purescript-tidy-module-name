@@ -1,5 +1,5 @@
 package:
-  name: tidy-cli
+  name: tidy-module-name
   dependencies:
     - aff
     - argonaut-codecs
@@ -33,3 +33,4 @@ package:
     - transformers
     - tuples
     - debug
+    - tidy-module-name-lib
